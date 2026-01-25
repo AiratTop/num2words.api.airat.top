@@ -72,6 +72,10 @@ If `number` is missing or invalid, the API returns HTTP 400:
 
 CORS is enabled for all origins (`*`).
 
+## Privacy
+
+No analytics or request logs are collected by this project.
+
 ## Monitoring
 
 Health check endpoint:
