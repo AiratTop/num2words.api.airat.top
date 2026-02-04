@@ -1,4 +1,4 @@
-// Russian number-to-words API for amounts in rubles.
+// Number-to-words API for money amounts (RU + EN).
 
 // Dictionary chunks used by the legacy algorithm (units/teens/tens/hundreds + scale words).
 const WORDS = [
@@ -44,6 +44,40 @@ function chooseEnding(number, one, few, many) {
   return many;
 }
 
+function choosePluralEn(number, singular, plural) {
+  return Math.abs(number) === 1 ? singular : plural;
+}
+
+function capitalizeFirst(text) {
+  if (!text) return text;
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+function formatSentence(text, caps) {
+  if (!text) return text;
+  return caps ? text.toUpperCase() : capitalizeFirst(text);
+}
+
+function normalizeLang(value) {
+  if (!value) return 'ru';
+  const v = value.toString().trim().toLowerCase();
+  if (v.startsWith('ru')) return 'ru';
+  if (v.startsWith('en')) return 'en';
+  return null;
+}
+
+function normalizeCurrency(value, lang) {
+  if (!value) return lang === 'en' ? 'usd' : 'rub';
+  const v = value.toString().trim().toLowerCase();
+  const rubAliases = new Set(['rub', 'rur', 'ruble', 'rubles']);
+  const usdAliases = new Set(['usd', 'dollar', 'dollars', 'us']);
+  const eurAliases = new Set(['eur', 'euro', 'euros']);
+  if (lang === 'ru' && rubAliases.has(v)) return 'rub';
+  if (lang === 'en' && usdAliases.has(v)) return 'usd';
+  if (lang === 'en' && eurAliases.has(v)) return 'eur';
+  return null;
+}
+
 // Parse boolean-ish values from query/body (\"true\", \"1\", etc.).
 function parseBool(value) {
   if (value === undefined || value === null) return undefined;
@@ -67,8 +101,8 @@ function normalizeNumber(value) {
   return null;
 }
 
-// Convert number to Russian words, with optional rubles/kopecks and uppercase.
-function num2words(value, ruble = true, caps = false) {
+// Convert number to Russian words, with rubles/kopecks and uppercase.
+function num2wordsRu(value, caps = false) {
   const priceStr = String(value)
     .replace(',', '.')
     .replace(/[ \f\n\r\t\v]/g, '');
@@ -77,11 +111,18 @@ function num2words(value, ruble = true, caps = false) {
     return { error: 'Не числовое значение' };
   }
 
-  let rubPart = priceStr;
+  let isNegative = false;
+  let normalized = priceStr;
+  if (normalized.startsWith('-')) {
+    isNegative = true;
+    normalized = normalized.slice(1);
+  }
+
+  let rubPart = normalized;
   let kopPart = 0;
 
-  if (priceStr.includes('.')) {
-    const parts = priceStr.split('.');
+  if (normalized.includes('.')) {
+    const parts = normalized.split('.');
     rubPart = parts[0] === '' ? '0' : parts[0];
     let fraction = parts[1] || '0';
     if (fraction.length === 1) fraction += '0';
@@ -94,6 +135,9 @@ function num2words(value, ruble = true, caps = false) {
   }
 
   const price = rubPart;
+  if (Number(price) === 0 && kopPart === 0) {
+    isNegative = false;
+  }
 
   // Small helper to read digits from the right.
   function n(start, len) {
@@ -140,45 +184,150 @@ function num2words(value, ruble = true, caps = false) {
 
   const rubNumber = Number(price);
   const dummy = ['', '', '', '', '', '', '', '', '', ''];
-  let result = propis(price, dummy).trim();
+  let amountTextBase = propis(price, dummy).trim();
+  if (amountTextBase === '') amountTextBase = 'ноль';
+  if (isNegative) amountTextBase = `минус ${amountTextBase}`;
+  let resultBase = amountTextBase;
 
-  // Rubles are always shown when kopecks exist.
-  const showRuble = (ruble === undefined ? true : ruble) || kopPart > 0;
-
-  if (showRuble) {
-    const rubWord = chooseEnding(rubNumber, 'рубль', 'рубля', 'рублей');
-    if (result === '') {
-      result = `Ноль ${rubWord}`;
-    } else {
-      result += ` ${rubWord}`;
-    }
-  }
+  const currencyForm = chooseEnding(rubNumber, 'рубль', 'рубля', 'рублей');
+  resultBase += ` ${currencyForm}`;
 
   // Append kopecks when present.
+  let coinsText = null;
   if (kopPart > 0) {
     const kopWord = chooseEnding(kopPart, 'копейка', 'копейки', 'копеек');
-    result += ` ${kopPart} ${kopWord}`;
+    coinsText = `${kopPart} ${kopWord}`;
+    resultBase += ` ${coinsText}`;
   }
 
-  if (result.length > 0) {
-    result = result.charAt(0).toUpperCase() + result.slice(1);
-  }
+  const result = formatSentence(resultBase, caps);
+  const amountText = formatSentence(amountTextBase, caps);
+  const currencyFormOut = currencyForm ? (caps ? currencyForm.toUpperCase() : currencyForm) : null;
+  const coinsTextOut = coinsText ? (caps ? coinsText.toUpperCase() : coinsText) : null;
 
-  if (caps === true) {
-    result = result.toUpperCase();
-  }
-
-  return { result, kopPart, showRuble };
+  return {
+    result,
+    amount_text: amountText,
+    currency_form: currencyFormOut,
+    coins_text: coinsTextOut
+  };
 }
 
-// Split the rendered string into amount/currency/coins parts when possible.
-function parseResultParts(result) {
-  const match = result.match(/^([А-Яа-яЁё\s]+)\s([А-Яа-яЁё]+)\s?(\d{1,2}\s[А-Яа-яЁё]+)?$/);
-  if (!match) return null;
+// Convert number to English words, with dollars/cents and uppercase.
+function num2wordsEn(value, currency = 'usd', caps = false) {
+  const priceStr = String(value)
+    .replace(',', '.')
+    .replace(/[ \f\n\r\t\v]/g, '');
+
+  if (priceStr.length === 0 || Number.isNaN(Number(priceStr))) {
+    return { error: 'Not a number' };
+  }
+
+  let isNegative = false;
+  let normalized = priceStr;
+  if (normalized.startsWith('-')) {
+    isNegative = true;
+    normalized = normalized.slice(1);
+  }
+
+  let intPart = normalized;
+  let centsPart = 0;
+
+  if (normalized.includes('.')) {
+    const parts = normalized.split('.');
+    intPart = parts[0] === '' ? '0' : parts[0];
+    let fraction = parts[1] || '0';
+    if (fraction.length === 1) fraction += '0';
+    if (fraction.length > 2) fraction = fraction.substr(0, 2);
+    centsPart = Number(fraction);
+  }
+
+  if (intPart.length > 12) {
+    return { error: 'Number is too large' };
+  }
+
+  if (Number(intPart) === 0 && centsPart === 0) {
+    isNegative = false;
+  }
+
+  const ONES = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'];
+  const TEENS = ['ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen'];
+  const TENS = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'];
+  const SCALES = ['', 'thousand', 'million', 'billion'];
+
+  function chunkToWords(number) {
+    const words = [];
+    const hundreds = Math.floor(number / 100);
+    const rest = number % 100;
+
+    if (hundreds > 0) {
+      words.push(ONES[hundreds], 'hundred');
+    }
+
+    if (rest > 0) {
+      if (rest < 10) {
+        words.push(ONES[rest]);
+      } else if (rest < 20) {
+        words.push(TEENS[rest - 10]);
+      } else {
+        const tens = Math.floor(rest / 10);
+        const ones = rest % 10;
+        words.push(TENS[tens]);
+        if (ones > 0) words.push(ONES[ones]);
+      }
+    }
+
+    return words.join(' ');
+  }
+
+  function integerToWords(numStr) {
+    if (Number(numStr) === 0) return 'zero';
+    const parts = [];
+    let groupIndex = 0;
+    for (let i = numStr.length; i > 0; i -= 3) {
+      const start = Math.max(0, i - 3);
+      const chunk = Number(numStr.slice(start, i));
+      if (chunk > 0) {
+        const chunkWords = chunkToWords(chunk);
+        const scale = SCALES[groupIndex];
+        parts.unshift(scale ? `${chunkWords} ${scale}` : chunkWords);
+      }
+      groupIndex += 1;
+    }
+    return parts.join(' ');
+  }
+
+  const currencyForms = {
+    usd: { major: ['dollar', 'dollars'], minor: ['cent', 'cents'] },
+    eur: { major: ['euro', 'euros'], minor: ['cent', 'cents'] }
+  };
+  const forms = currencyForms[currency] || currencyForms.usd;
+
+  let amountTextBase = integerToWords(intPart);
+  if (amountTextBase === '') amountTextBase = 'zero';
+  if (isNegative) amountTextBase = `minus ${amountTextBase}`;
+
+  let resultBase = amountTextBase;
+  const currencyForm = choosePluralEn(Number(intPart), forms.major[0], forms.major[1]);
+  resultBase += ` ${currencyForm}`;
+
+  let coinsText = null;
+  if (centsPart > 0) {
+    const centWord = choosePluralEn(centsPart, forms.minor[0], forms.minor[1]);
+    coinsText = `${centsPart} ${centWord}`;
+    resultBase += ` ${coinsText}`;
+  }
+
+  const result = formatSentence(resultBase, caps);
+  const amountText = formatSentence(amountTextBase, caps);
+  const currencyFormOut = currencyForm ? (caps ? currencyForm.toUpperCase() : currencyForm) : null;
+  const coinsTextOut = coinsText ? (caps ? coinsText.toUpperCase() : coinsText) : null;
+
   return {
-    amount_text: match[1].trim(),
-    currency_form: match[2],
-    coins_text: match[3] ? match[3].trim() : null
+    result,
+    amount_text: amountText,
+    currency_form: currencyFormOut,
+    coins_text: coinsTextOut
   };
 }
 
@@ -191,8 +340,9 @@ async function readPayload(request) {
       const body = await request.json();
       return {
         number: body?.number ?? body?.value ?? null,
-        ruble: body?.ruble,
-        caps: body?.caps
+        caps: body?.caps,
+        lang: body?.lang,
+        currency: body?.currency
       };
     } catch {
       return {};
@@ -204,8 +354,9 @@ async function readPayload(request) {
     const params = new URLSearchParams(body);
     return {
       number: params.get('number') ?? params.get('value'),
-      ruble: params.get('ruble'),
-      caps: params.get('caps')
+      caps: params.get('caps'),
+      lang: params.get('lang'),
+      currency: params.get('currency')
     };
   }
 
@@ -255,18 +406,30 @@ export default {
 
     // Accept both `number` and `value` as input keys.
     let number = url.searchParams.get('number') ?? url.searchParams.get('value');
-    let ruble = parseBool(url.searchParams.get('ruble'));
     let caps = parseBool(url.searchParams.get('caps'));
+    let lang = url.searchParams.get('lang');
+    let currency = url.searchParams.get('currency');
 
-    // Read payload on POST only when query params are missing.
-    if (number === null && request.method === 'POST') {
+    // Read payload on POST when query params are missing.
+    if (request.method === 'POST' && (number === null || caps === undefined || lang === null || currency === null)) {
       const payload = await readPayload(request);
       const payloadNumber = normalizeNumber(payload.number);
       if (number === null && payloadNumber !== null) {
         number = payloadNumber;
       }
-      if (ruble === undefined) ruble = parseBool(payload.ruble);
       if (caps === undefined) caps = parseBool(payload.caps);
+      if (lang === null && payload.lang !== undefined) lang = payload.lang;
+      if (currency === null && payload.currency !== undefined) currency = payload.currency;
+    }
+
+    const normalizedLang = normalizeLang(lang);
+    if (!normalizedLang) {
+      return jsonResponse({ error: 'Unsupported language' }, 400);
+    }
+
+    const normalizedCurrency = normalizeCurrency(currency, normalizedLang);
+    if (!normalizedCurrency) {
+      return jsonResponse({ error: 'Unsupported currency' }, 400);
     }
 
     const normalizedNumber = normalizeNumber(number);
@@ -274,22 +437,24 @@ export default {
       return jsonResponse({ error: 'Missing required parameter: number' }, 400);
     }
 
-    const { result, error } = num2words(normalizedNumber, ruble, caps);
+    const renderer = normalizedLang === 'en' ? num2wordsEn : num2wordsRu;
+    const { result, error, amount_text, currency_form, coins_text } = normalizedLang === 'en'
+      ? renderer(normalizedNumber, normalizedCurrency, caps)
+      : renderer(normalizedNumber, caps);
     if (error) {
       return jsonResponse({ error }, 400);
     }
 
     const response = {
       number: normalizedNumber,
+      lang: normalizedLang,
+      currency: normalizedCurrency,
       result
     };
 
-    const parts = parseResultParts(result);
-    if (parts) {
-      response.amount_text = parts.amount_text;
-      response.currency_form = parts.currency_form;
-      if (parts.coins_text) response.coins_text = parts.coins_text;
-    }
+    if (amount_text) response.amount_text = amount_text;
+    if (currency_form) response.currency_form = currency_form;
+    if (coins_text) response.coins_text = coins_text;
 
     return jsonResponse(response);
   }
