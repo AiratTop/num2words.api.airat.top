@@ -5,6 +5,7 @@
 Tiny Cloudflare Worker that converts numbers to words for Russian (RUB) and English (USD/EUR).
 
 Live endpoint: https://num2words.api.airat.top
+Status page: https://status.airat.top
 
 ## API
 
