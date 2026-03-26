@@ -370,7 +370,7 @@ async function readPayload(request) {
 
 // Consistent JSON response with CORS headers.
 function jsonResponse(data, status = 200) {
-  return new Response(JSON.stringify(data), {
+  return new Response(JSON.stringify(data, null, 2), {
     status,
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
