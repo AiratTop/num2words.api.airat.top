@@ -396,6 +396,12 @@ export default {
     }
 
     const url = new URL(request.url);
+    if (url.pathname === '/favicon.ico') {
+      return new Response(null, {
+        status: 204,
+        headers: { 'Cache-Control': 'public, max-age=86400' }
+      });
+    }
     if (url.pathname === '/robots.txt') {
       return textResponse('User-agent: *\nDisallow: /\n');
     }
